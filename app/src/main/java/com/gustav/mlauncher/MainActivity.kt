@@ -19,6 +19,7 @@ import android.os.BatteryManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.provider.Settings
 import android.text.TextUtils
@@ -79,7 +80,9 @@ class MainActivity : AppCompatActivity() {
         private const val EXTRA_OPEN_CAPTURE_DAY = "com.gustav.minicalendar.extra.OPEN_CAPTURE_DAY"
         private const val EXTRA_CAPTURE_ALL_DAY = "com.gustav.minicalendar.extra.CAPTURE_ALL_DAY"
         private const val MINI_GTD_PACKAGE = "com.gustav.minigtd"
+        private const val GOOGLE_CALENDAR_PACKAGE = "com.google.android.calendar"
         private const val EXTRA_OPEN_NEXT = "com.gustav.minigtd.extra.OPEN_NEXT"
+        private const val EXTRA_OPEN_INBOX = "com.gustav.minigtd.extra.OPEN_INBOX"
         private const val EXTRA_OPEN_CAPTURE = "com.gustav.minigtd.extra.OPEN_CAPTURE"
         private val MINI_GTD_URI: Uri = Uri.parse("content://com.gustav.minigtd.launcher/tasks")
     }
@@ -161,6 +164,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var calendarPanel: LinearLayout
     private lateinit var calendarItemsContainer: LinearLayout
     private lateinit var gtdPanel: LinearLayout
+    private lateinit var gtdTitleView: TextView
     private lateinit var gtdAddButton: TextView
     private lateinit var gtdItemsContainer: LinearLayout
     private lateinit var appListView: RecyclerView
@@ -335,6 +339,7 @@ class MainActivity : AppCompatActivity() {
         calendarPanel = findViewById(R.id.calendarPanel)
         calendarItemsContainer = findViewById(R.id.calendarItemsContainer)
         gtdPanel = findViewById(R.id.gtdPanel)
+        gtdTitleView = findViewById(R.id.gtdTitleView)
         gtdAddButton = findViewById(R.id.gtdAddButton)
         gtdItemsContainer = findViewById(R.id.gtdItemsContainer)
         appListView = findViewById(R.id.appListView)
@@ -357,8 +362,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupHomePanels() {
+        clockView.setOnClickListener { openClockApp() }
+        dateView.setOnClickListener { openCalendarHome() }
+        batteryView.setOnClickListener { openSystemSettings() }
         calendarPanel.setOnClickListener { handleCalendarPanelClick() }
         gtdPanel.setOnClickListener { openMiniGtd(openCapture = false) }
+        gtdTitleView.setOnClickListener { openMiniGtdInbox() }
         gtdAddButton.setOnClickListener { openMiniGtd(openCapture = true) }
         settingsButton.setOnClickListener { renderState(LauncherState.Settings) }
     }
@@ -1409,6 +1418,35 @@ class MainActivity : AppCompatActivity() {
             android.content.pm.PackageManager.PERMISSION_GRANTED
     }
 
+    private fun openClockApp() {
+        val intents =
+            listOf(
+                Intent(AlarmClock.ACTION_SHOW_ALARMS),
+                Intent(AlarmClock.ACTION_SET_ALARM),
+                packageManager.getLaunchIntentForPackage("com.google.android.deskclock"),
+                packageManager.getLaunchIntentForPackage("com.android.deskclock"),
+            ).filterNotNull()
+
+        for (intent in intents) {
+            try {
+                startActivity(intent)
+                return
+            } catch (_: ActivityNotFoundException) {
+                // Try the next fallback.
+            }
+        }
+
+        Toast.makeText(this, R.string.launch_failed, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun openSystemSettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_SETTINGS))
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, R.string.launch_failed, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun openSystemCalendar(focusDayMillis: Long) {
         val calendarIntent =
             Intent(Intent.ACTION_VIEW).apply {
@@ -1423,6 +1461,29 @@ class MainActivity : AppCompatActivity() {
         } catch (_: ActivityNotFoundException) {
             Toast.makeText(this, R.string.launch_failed, Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun openCalendarHome() {
+        if (openMiniCalendarHome()) {
+            return
+        }
+
+        val googleCalendarIntent = packageManager.getLaunchIntentForPackage(GOOGLE_CALENDAR_PACKAGE)
+        if (googleCalendarIntent != null) {
+            try {
+                startActivity(googleCalendarIntent)
+                return
+            } catch (_: ActivityNotFoundException) {
+                // Fall through to generic calendar view.
+            }
+        }
+
+        openSystemCalendar(
+            LocalDate.now(ZoneId.systemDefault())
+                .atStartOfDay(ZoneId.systemDefault())
+                .toInstant()
+                .toEpochMilli(),
+        )
     }
 
     private fun openCalendarDay(focusDayMillis: Long) {
@@ -1460,6 +1521,23 @@ class MainActivity : AppCompatActivity() {
         return try {
             launchIntent.putExtra(EXTRA_OPEN_FOCUS_DAY, true)
             launchIntent.putExtra(EXTRA_FOCUS_DAY_MILLIS, focusDayMillis)
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            startActivity(launchIntent)
+            true
+        } catch (_: ActivityNotFoundException) {
+            false
+        }
+    }
+
+    private fun openMiniCalendarHome(): Boolean {
+        val launchIntent =
+            packageManager.getLaunchIntentForPackage(MINI_CALENDAR_PACKAGE)
+                ?: Intent(Intent.ACTION_MAIN).apply {
+                    component = ComponentName(MINI_CALENDAR_PACKAGE, "com.gustav.minicalendar.MainActivity")
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                }
+
+        return try {
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             startActivity(launchIntent)
             true
@@ -1517,6 +1595,24 @@ class MainActivity : AppCompatActivity() {
         if (openCapture) {
             launchIntent.putExtra(EXTRA_OPEN_CAPTURE, true)
         }
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+
+        try {
+            startActivity(launchIntent)
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, R.string.launch_failed, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun openMiniGtdInbox() {
+        val launchIntent =
+            packageManager.getLaunchIntentForPackage(MINI_GTD_PACKAGE)
+                ?: Intent(Intent.ACTION_MAIN).apply {
+                    component = ComponentName(MINI_GTD_PACKAGE, "com.gustav.minigtd.MainActivity")
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                }
+
+        launchIntent.putExtra(EXTRA_OPEN_INBOX, true)
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
 
         try {

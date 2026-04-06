@@ -29,7 +29,7 @@
     <string name="home_gtd_add">+</string>
     <string name="settings_title">settings</string>
     <string name="settings_app_name">mLauncher</string>
-    <string name="settings_revision">revision 1.1</string>
+    <string name="settings_revision">revision 1.11</string>
     <string name="settings_integration_label">Calendar &amp; GTD integration</string>
     <string name="settings_integration_available">Show calendar and GTD panels on home.</string>
     <string name="settings_integration_requires_apps">Requires both miniCalendar and miniGTD.</string>
