@@ -508,11 +508,12 @@
                 android:layout_height="48dp"
                 android:layout_gravity="top|end"
                 android:background="@drawable/bg_context_menu_close"
+                android:contentDescription="@string/cancel"
                 android:padding="12dp"
                 android:src="@drawable/ic_context_close"
-                android:tint="@color/black"
                 android:translationX="18dp"
-                android:translationY="-18dp" />
+                android:translationY="-18dp"
+                app:tint="@color/black" />
         </FrameLayout>
     </FrameLayout>
 </FrameLayout>

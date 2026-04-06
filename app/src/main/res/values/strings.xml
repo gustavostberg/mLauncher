@@ -1,6 +1,7 @@
 <resources>
     <string name="app_name">mLauncher</string>
     <string name="search_hint">search</string>
+    <string name="search_enter_marker">↵</string>
     <string name="battery_format">%1$d%%</string>
     <string name="launch_failed">Could not open app.</string>
     <string name="action_app_info">App Info</string>
