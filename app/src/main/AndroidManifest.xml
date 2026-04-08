@@ -13,6 +13,7 @@
         </intent>
         <package android:name="com.gustav.minicalendar" />
         <package android:name="com.gustav.minigtd" />
+        <package android:name="com.teslamotors.tesla" />
     </queries>
 
     <application

@@ -19,6 +19,11 @@ class LauncherPreferences(context: Context) {
         private const val TESLA_LAST_UPDATED_KEY = "tesla_last_updated"
         private const val TESLA_DISPLAY_NAME_KEY = "tesla_display_name"
         private const val TESLA_LAST_ERROR_KEY = "tesla_last_error"
+        private const val HOME_WIDGET_ENABLED_KEY = "home_widget_enabled"
+        private const val HOME_WIDGET_EXPANDED_KEY = "home_widget_expanded"
+        private const val HOME_WIDGET_DEBUG_KEY = "home_widget_debug"
+        private const val HOME_WIDGET_ID_KEY = "home_widget_id"
+        private const val TESLA_WIDGET_ID_KEY = "tesla_widget_id"
     }
 
     private val prefs: SharedPreferences =
@@ -198,6 +203,55 @@ class LauncherPreferences(context: Context) {
     fun loadTeslaLastError(): String = prefs.getString(TESLA_LAST_ERROR_KEY, "").orEmpty()
 
     fun isTeslaConfigured(): Boolean = loadTeslaAccessToken().isNotBlank()
+
+    fun loadHomeWidgetEnabled(): Boolean {
+        if (prefs.contains(HOME_WIDGET_ENABLED_KEY)) {
+            return prefs.getBoolean(HOME_WIDGET_ENABLED_KEY, false)
+        }
+
+        return loadHomeWidgetId() != null
+    }
+
+    fun saveHomeWidgetEnabled(enabled: Boolean) {
+        prefs.edit()
+            .putBoolean(HOME_WIDGET_ENABLED_KEY, enabled)
+            .apply()
+    }
+
+    fun loadHomeWidgetExpanded(): Boolean = prefs.getBoolean(HOME_WIDGET_EXPANDED_KEY, false)
+
+    fun saveHomeWidgetExpanded(expanded: Boolean) {
+        prefs.edit()
+            .putBoolean(HOME_WIDGET_EXPANDED_KEY, expanded)
+            .apply()
+    }
+
+    fun loadHomeWidgetDebug(): Boolean = prefs.getBoolean(HOME_WIDGET_DEBUG_KEY, false)
+
+    fun saveHomeWidgetDebug(enabled: Boolean) {
+        prefs.edit()
+            .putBoolean(HOME_WIDGET_DEBUG_KEY, enabled)
+            .apply()
+    }
+
+    fun loadHomeWidgetId(): Int? =
+        when {
+            prefs.contains(HOME_WIDGET_ID_KEY) -> prefs.getInt(HOME_WIDGET_ID_KEY, 0)
+            prefs.contains(TESLA_WIDGET_ID_KEY) -> prefs.getInt(TESLA_WIDGET_ID_KEY, 0)
+            else -> null
+        }.takeIf { it != null && it > 0 }
+
+    fun saveHomeWidgetId(widgetId: Int?) {
+        prefs.edit().apply {
+            if (widgetId == null || widgetId <= 0) {
+                remove(HOME_WIDGET_ID_KEY)
+                remove(TESLA_WIDGET_ID_KEY)
+            } else {
+                putInt(HOME_WIDGET_ID_KEY, widgetId)
+                remove(TESLA_WIDGET_ID_KEY)
+            }
+        }.apply()
+    }
 
     fun maskedTeslaToken(): String {
         val token = loadTeslaAccessToken()

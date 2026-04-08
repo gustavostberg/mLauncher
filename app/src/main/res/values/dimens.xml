@@ -1,9 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <dimen name="favorite_spacing">14dp</dimen>
+    <dimen name="home_top_padding_default">28dp</dimen>
+    <dimen name="home_top_padding_expanded_widget">6dp</dimen>
+    <dimen name="home_clock_margin_top_default">8dp</dimen>
+    <dimen name="home_clock_margin_top_expanded">0dp</dimen>
+    <dimen name="home_content_margin_top_default">20dp</dimen>
+    <dimen name="home_content_margin_top_expanded">8dp</dimen>
     <dimen name="page_indicator_width">10dp</dimen>
     <dimen name="page_indicator_height">10dp</dimen>
     <dimen name="page_indicator_active_height">12dp</dimen>
     <dimen name="page_indicator_spacing">10dp</dimen>
     <dimen name="page_indicator_stroke">1.33dp</dimen>
+    <dimen name="tesla_widget_size">124dp</dimen>
+    <dimen name="home_widget_cell_size">62dp</dimen>
+    <dimen name="home_widget_height">124dp</dimen>
+    <dimen name="home_widget_height_expanded">144dp</dimen>
+    <dimen name="tesla_widget_gap">14dp</dimen>
 </resources>

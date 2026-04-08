@@ -29,12 +29,35 @@
     <string name="home_gtd_add">+</string>
     <string name="settings_title">settings</string>
     <string name="settings_app_name">mLauncher</string>
-    <string name="settings_revision">revision 1.11</string>
+    <string name="settings_revision">revision 1.20</string>
     <string name="settings_integration_label">Calendar &amp; GTD integration</string>
     <string name="settings_integration_available">Show calendar and GTD panels on home.</string>
     <string name="settings_integration_requires_apps">Requires both miniCalendar and miniGTD.</string>
-    <string name="settings_tesla_label">Tesla battery</string>
-    <string name="settings_tesla_hint">Updates once per hour between 06:00 and 23:59. Never between 00:00 and 06:00.</string>
+    <string name="settings_widget_label">2-row widget</string>
+    <string name="settings_widget_hint">Shows one home widget that is 2 rows tall and 2, 3 or 4 columns wide. Turning it off clears the current widget.</string>
+    <string name="settings_widget_expanded_label">Expanded widget area</string>
+    <string name="settings_widget_expanded_hint">Gives the widget more height and uses a little more of the space at the top.</string>
+    <string name="settings_widget_debug_label">Widget debug data</string>
+    <string name="settings_widget_debug_hint">Shows matching widgets and raw Tesla widget size data in settings.</string>
+    <string name="settings_widget_off">Widget is off.</string>
+    <string name="settings_widget_none">No widget selected yet.</string>
+    <string name="settings_widget_selected">Selected widget: %1$s</string>
+    <string name="settings_widget_missing">No home widgets are available on this device.</string>
+    <string name="settings_widget_no_matching">No 2-row widgets were found.</string>
+    <string name="settings_widget_debug_matches">Matching widgets:</string>
+    <string name="settings_widget_debug_tesla">Tesla widget debug:</string>
+    <string name="settings_widget_debug_none">none</string>
+    <string name="settings_widget_debug_item">%1$s (%2$dx%3$d)</string>
+    <string name="settings_widget_debug_raw_item">%1$s raw=%2$d x %3$d parsed=%4$dx%5$d</string>
+    <string name="settings_widget_choose">Choose widget</string>
+    <string name="settings_widget_change">Change widget</string>
+    <string name="settings_widget_clear">Clear widget</string>
+    <string name="settings_widget_saved">Widget selected.</string>
+    <string name="settings_widget_cleared">Widget removed.</string>
+    <string name="settings_widget_picker_failed">Could not open widget picker.</string>
+    <string name="settings_widget_configure_failed">Could not configure widget.</string>
+    <string name="settings_widget_dialog_title">Choose widget</string>
+    <string name="settings_widget_size_format">%1$d x %2$d</string>
     <string name="settings_tesla_not_configured">Not configured yet.</string>
     <string name="settings_tesla_configured">Configured for Tesla sync.</string>
     <string name="settings_tesla_token_saved">Saved token: %1$s</string>
@@ -57,4 +80,6 @@
     <string name="settings_tesla_requires_config">Configure Tesla access token first.</string>
     <string name="home_tesla_battery">Tesla %1$d%%</string>
     <string name="tesla_default_display_name">Tesla</string>
+    <string name="home_widget_placeholder">Widget\nTap to choose</string>
+    <string name="home_widget_bind_failed">Could not add widget.</string>
 </resources>

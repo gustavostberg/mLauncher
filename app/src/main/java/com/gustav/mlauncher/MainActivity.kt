@@ -1,6 +1,9 @@
 package com.gustav.mlauncher
 
 import android.Manifest
+import android.appwidget.AppWidgetHostView
+import android.appwidget.AppWidgetManager
+import android.appwidget.AppWidgetProviderInfo
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ComponentName
@@ -12,6 +15,7 @@ import android.content.pm.ApplicationInfo
 import android.graphics.Typeface
 import android.graphics.RenderEffect
 import android.graphics.Shader
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
@@ -23,14 +27,19 @@ import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.provider.Settings
 import android.text.TextUtils
+import android.util.TypedValue
 import android.util.Log
 import android.view.Gravity
 import android.view.GestureDetector
 import android.view.KeyEvent
+import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
+import android.widget.BaseAdapter
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -74,6 +83,7 @@ class MainActivity : AppCompatActivity() {
         private const val MAX_HOME_FAVORITES = 9
         private const val MAX_HOME_CALENDAR_LINES = 10
         private const val MAX_HOME_GTD_ITEMS = 9
+        private const val TESLA_WIDGET_HOST_ID = 1200
         private const val MINI_CALENDAR_PACKAGE = "com.gustav.minicalendar"
         private const val EXTRA_OPEN_FOCUS_DAY = "com.gustav.minicalendar.extra.OPEN_FOCUS_DAY"
         private const val EXTRA_FOCUS_DAY_MILLIS = "com.gustav.minicalendar.extra.FOCUS_DAY_MILLIS"
@@ -121,6 +131,14 @@ class MainActivity : AppCompatActivity() {
 
     private data class HomeTaskItem(val line: String)
 
+    private data class HomeWidgetCandidate(
+        val info: AppWidgetProviderInfo,
+        val columns: Int,
+        val rows: Int,
+        val label: String,
+        val icon: Drawable?,
+    )
+
     private data class HomeIntegrationSnapshot(
         val calendar: HomePanelState<HomeCalendarItem> = HomePanelState(),
         val gtd: HomePanelState<HomeTaskItem> = HomePanelState(),
@@ -131,6 +149,8 @@ class MainActivity : AppCompatActivity() {
     private val appListAdapter = AppListAdapter(::launchApp, ::showDrawerContextMenu)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
+    private val appWidgetManager by lazy { AppWidgetManager.getInstance(this) }
+    private val appWidgetHost by lazy { PlainAppWidgetHost(applicationContext, TESLA_WIDGET_HOST_ID) }
     private val uninstallLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             Log.d(TAG, "Uninstall result callback resultCode=${result.resultCode}")
@@ -140,9 +160,18 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
             loadAppsAsync()
         }
+    private val bindHomeWidgetLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            handleHomeWidgetBound(result.resultCode)
+        }
+    private val configureHomeWidgetLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            handleHomeWidgetConfigured(result.resultCode)
+        }
 
     private lateinit var homeContainer: View
     private lateinit var browseContainer: View
+    private lateinit var homeTopRow: LinearLayout
     private lateinit var homeContentRow: LinearLayout
     private lateinit var favoritesColumn: LinearLayout
     private lateinit var integrationColumn: LinearLayout
@@ -150,12 +179,18 @@ class MainActivity : AppCompatActivity() {
     private lateinit var dateView: TextView
     private lateinit var batteryView: TextView
     private lateinit var teslaStatusView: TextView
+    private lateinit var teslaWidgetSlot: FrameLayout
+    private lateinit var teslaWidgetContainer: FrameLayout
+    private lateinit var teslaWidgetPlaceholder: LinearLayout
     private lateinit var queryView: TextView
     private lateinit var settingsButton: ImageButton
+    private lateinit var settingsScrollContainer: View
     private lateinit var settingsContainer: LinearLayout
     private lateinit var settingsIntegrationSwitch: SwitchCompat
     private lateinit var settingsIntegrationHint: TextView
     private lateinit var settingsTeslaSwitch: SwitchCompat
+    private lateinit var settingsWidgetExpandedSwitch: SwitchCompat
+    private lateinit var settingsWidgetDebugSwitch: SwitchCompat
     private lateinit var settingsTeslaStatus: TextView
     private lateinit var settingsTeslaConfigureButton: TextView
     private lateinit var settingsTeslaRefreshButton: TextView
@@ -183,6 +218,7 @@ class MainActivity : AppCompatActivity() {
     private var batteryReceiverRegistered = false
     private var currentBlurTarget: View? = null
     private var suppressIntegrationSwitchCallback = false
+    private var pendingHomeWidgetId: Int? = null
     @Volatile
     private var appsLoading = false
 
@@ -250,9 +286,11 @@ class MainActivity : AppCompatActivity() {
         setupSettingsControls()
         setupContextMenu()
         setupBackHandling()
+        setupTeslaWidgetSlot()
 
         renderClock()
         renderTeslaHomeStatus()
+        renderTeslaWidgetSlot()
         renderState(LauncherState.Home)
         TeslaSyncScheduler.syncFromPreferences(this)
         loadAppsAsync()
@@ -270,6 +308,8 @@ class MainActivity : AppCompatActivity() {
             batteryReceiverRegistered = true
         }
 
+        runCatching { appWidgetHost.startListening() }
+        renderTeslaWidgetSlot()
         mainHandler.removeCallbacks(clockTicker)
         mainHandler.post(clockTicker)
     }
@@ -294,6 +334,7 @@ class MainActivity : AppCompatActivity() {
             unregisterReceiver(batteryReceiver)
             batteryReceiverRegistered = false
         }
+        runCatching { appWidgetHost.stopListening() }
         mainHandler.removeCallbacks(clockTicker)
         super.onStop()
     }
@@ -318,6 +359,7 @@ class MainActivity : AppCompatActivity() {
     private fun bindViews() {
         homeContainer = findViewById(R.id.homeContainer)
         browseContainer = findViewById(R.id.browseContainer)
+        homeTopRow = findViewById(R.id.homeTopRow)
         homeContentRow = findViewById(R.id.homeContentRow)
         favoritesColumn = findViewById(R.id.favoritesColumn)
         integrationColumn = findViewById(R.id.integrationColumn)
@@ -325,12 +367,18 @@ class MainActivity : AppCompatActivity() {
         dateView = findViewById(R.id.dateView)
         batteryView = findViewById(R.id.batteryView)
         teslaStatusView = findViewById(R.id.teslaStatusView)
+        teslaWidgetSlot = findViewById(R.id.teslaWidgetSlot)
+        teslaWidgetContainer = findViewById(R.id.teslaWidgetContainer)
+        teslaWidgetPlaceholder = findViewById(R.id.teslaWidgetPlaceholder)
         queryView = findViewById(R.id.queryView)
         settingsButton = findViewById(R.id.settingsButton)
+        settingsScrollContainer = findViewById(R.id.settingsScrollContainer)
         settingsContainer = findViewById(R.id.settingsContainer)
         settingsIntegrationSwitch = findViewById(R.id.settingsIntegrationSwitch)
         settingsIntegrationHint = findViewById(R.id.settingsIntegrationHint)
         settingsTeslaSwitch = findViewById(R.id.settingsTeslaSwitch)
+        settingsWidgetExpandedSwitch = findViewById(R.id.settingsWidgetExpandedSwitch)
+        settingsWidgetDebugSwitch = findViewById(R.id.settingsWidgetDebugSwitch)
         settingsTeslaStatus = findViewById(R.id.settingsTeslaStatus)
         settingsTeslaConfigureButton = findViewById(R.id.settingsTeslaConfigureButton)
         settingsTeslaRefreshButton = findViewById(R.id.settingsTeslaRefreshButton)
@@ -372,6 +420,10 @@ class MainActivity : AppCompatActivity() {
         settingsButton.setOnClickListener { renderState(LauncherState.Settings) }
     }
 
+    private fun setupTeslaWidgetSlot() {
+        teslaWidgetPlaceholder.setOnClickListener { showHomeWidgetPickerDialog() }
+    }
+
     private fun setupSettingsControls() {
         settingsIntegrationSwitch.setOnCheckedChangeListener { _, isChecked ->
             if (suppressIntegrationSwitchCallback) {
@@ -397,23 +449,59 @@ class MainActivity : AppCompatActivity() {
                 return@setOnCheckedChangeListener
             }
 
-            if (isChecked && !launcherPreferences.isTeslaConfigured()) {
-                showTeslaSetupDialog()
-                suppressIntegrationSwitchCallback = true
-                settingsTeslaSwitch.isChecked = launcherPreferences.loadTeslaEnabled()
-                suppressIntegrationSwitchCallback = false
+            launcherPreferences.saveHomeWidgetEnabled(isChecked)
+
+            if (!isChecked) {
+                clearHomeWidgetBinding(deleteHostId = true)
+                renderTeslaWidgetSlot()
+                renderTeslaHomeStatus()
+                renderSettingsControls()
+                Toast.makeText(this, R.string.settings_widget_cleared, Toast.LENGTH_SHORT).show()
                 return@setOnCheckedChangeListener
             }
 
-            launcherPreferences.saveTeslaEnabled(isChecked)
-            TeslaSyncScheduler.syncFromPreferences(this)
-            renderTeslaHomeStatus()
+            renderSettingsControls()
+            renderTeslaWidgetSlot()
+            showHomeWidgetPickerDialog()
+        }
+
+        settingsWidgetExpandedSwitch.setOnCheckedChangeListener { _, isChecked ->
+            if (suppressIntegrationSwitchCallback) {
+                return@setOnCheckedChangeListener
+            }
+
+            launcherPreferences.saveHomeWidgetExpanded(isChecked)
+            renderTeslaWidgetSlot()
             renderSettingsControls()
         }
 
-        settingsTeslaConfigureButton.setOnClickListener { showTeslaSetupDialog() }
-        settingsTeslaRefreshButton.setOnClickListener { refreshTeslaStatusNow() }
-        settingsTeslaDisconnectButton.setOnClickListener { disconnectTesla() }
+        settingsWidgetDebugSwitch.setOnCheckedChangeListener { _, isChecked ->
+            if (suppressIntegrationSwitchCallback) {
+                return@setOnCheckedChangeListener
+            }
+
+            launcherPreferences.saveHomeWidgetDebug(isChecked)
+            renderSettingsControls()
+        }
+
+        settingsTeslaConfigureButton.setOnClickListener {
+            if (!launcherPreferences.loadHomeWidgetEnabled()) {
+                suppressIntegrationSwitchCallback = true
+                settingsTeslaSwitch.isChecked = true
+                suppressIntegrationSwitchCallback = false
+                launcherPreferences.saveHomeWidgetEnabled(true)
+            }
+            renderSettingsControls()
+            showHomeWidgetPickerDialog()
+        }
+        settingsTeslaRefreshButton.visibility = View.GONE
+        settingsTeslaDisconnectButton.setOnClickListener {
+            clearHomeWidgetBinding(deleteHostId = true)
+            renderTeslaWidgetSlot()
+            renderTeslaHomeStatus()
+            renderSettingsControls()
+            Toast.makeText(this, R.string.settings_widget_cleared, Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun setupContextMenu() {
@@ -464,6 +552,7 @@ class MainActivity : AppCompatActivity() {
                     favoriteApps = favorites
                     homeIntegrationSnapshot = integrationSnapshot
                     renderTeslaHomeStatus()
+                    renderTeslaWidgetSlot()
                     renderFavorites()
                     renderHomeIntegrations()
                     renderState(currentState)
@@ -557,10 +646,19 @@ class MainActivity : AppCompatActivity() {
     private fun renderSettingsControls() {
         val available = isHomeIntegrationAvailable()
         val enabled = isHomeIntegrationEnabled()
+        val widgetsAvailable = appWidgetManager.installedProviders.isNotEmpty()
+        val widgetEnabled = launcherPreferences.loadHomeWidgetEnabled()
+        val widgetExpanded = launcherPreferences.loadHomeWidgetExpanded()
+        val widgetDebug = launcherPreferences.loadHomeWidgetDebug()
+        val hasWidget = launcherPreferences.loadHomeWidgetId() != null
         suppressIntegrationSwitchCallback = true
         settingsIntegrationSwitch.isEnabled = available
         settingsIntegrationSwitch.isChecked = enabled
-        settingsTeslaSwitch.isChecked = launcherPreferences.loadTeslaEnabled()
+        settingsTeslaSwitch.isEnabled = widgetsAvailable
+        settingsTeslaSwitch.isChecked = widgetEnabled
+        settingsWidgetExpandedSwitch.isEnabled = widgetsAvailable
+        settingsWidgetExpandedSwitch.isChecked = widgetExpanded
+        settingsWidgetDebugSwitch.isChecked = widgetDebug
         suppressIntegrationSwitchCallback = false
         settingsIntegrationHint.text =
             getString(
@@ -571,60 +669,456 @@ class MainActivity : AppCompatActivity() {
                 },
             )
         settingsIntegrationHint.alpha = if (available) 0.72f else 0.64f
-        settingsTeslaRefreshButton.isEnabled =
-            launcherPreferences.loadTeslaEnabled() && launcherPreferences.isTeslaConfigured()
-        settingsTeslaRefreshButton.alpha = if (settingsTeslaRefreshButton.isEnabled) 1f else 0.45f
-        settingsTeslaDisconnectButton.isEnabled = launcherPreferences.isTeslaConfigured()
+        settingsTeslaConfigureButton.isEnabled = widgetsAvailable
+        settingsTeslaConfigureButton.alpha = if (widgetsAvailable) 1f else 0.45f
+        settingsTeslaRefreshButton.visibility = View.GONE
+        settingsTeslaDisconnectButton.isEnabled = hasWidget
         settingsTeslaDisconnectButton.alpha = if (settingsTeslaDisconnectButton.isEnabled) 1f else 0.45f
         renderTeslaSettingsStatus()
     }
 
     private fun renderTeslaSettingsStatus() {
-        val configured = launcherPreferences.isTeslaConfigured()
         val lines = mutableListOf<String>()
-        lines +=
-            if (configured) {
-                getString(R.string.settings_tesla_configured)
-            } else {
-                getString(R.string.settings_tesla_not_configured)
-            }
-        launcherPreferences.maskedTeslaToken().takeIf { it.isNotBlank() }?.let { masked ->
-            lines += getString(R.string.settings_tesla_token_saved, masked)
+        val widgetsAvailable = appWidgetManager.installedProviders.isNotEmpty()
+        val widgetEnabled = launcherPreferences.loadHomeWidgetEnabled()
+        val widgetId = launcherPreferences.loadHomeWidgetId()
+        val info = widgetId?.let { appWidgetManager.getAppWidgetInfo(it) }
+
+        when {
+            !widgetsAvailable -> lines += getString(R.string.settings_widget_missing)
+            !widgetEnabled -> lines += getString(R.string.settings_widget_off)
+            info == null -> lines += getString(R.string.settings_widget_none)
+            else -> lines += getString(R.string.settings_widget_selected, info.loadLabel(packageManager))
         }
 
-        launcherPreferences.loadTeslaBatteryPercent()?.let { battery ->
-            lines += getString(R.string.settings_tesla_battery, battery)
-        }
-        launcherPreferences.loadTeslaLastUpdatedEpochMillis()?.let { lastUpdated ->
-            val dateTime =
-                Instant.ofEpochMilli(lastUpdated)
-                    .atZone(ZoneId.systemDefault())
-                    .format(DateTimeFormatter.ofPattern("EEE HH:mm", Locale.getDefault()))
-            lines += getString(R.string.settings_tesla_last_update, dateTime)
-        }
-        launcherPreferences.loadTeslaLastError().takeIf { it.isNotBlank() }?.let { error ->
-            lines += getString(R.string.settings_tesla_error, error)
+        if (launcherPreferences.loadHomeWidgetDebug()) {
+            val matchingWidgets = loadHomeWidgetCandidates()
+            lines += ""
+            lines += getString(R.string.settings_widget_debug_matches)
+            if (matchingWidgets.isEmpty()) {
+                lines += getString(R.string.settings_widget_debug_none)
+            } else {
+                matchingWidgets.forEach { candidate ->
+                    lines +=
+                        getString(
+                            R.string.settings_widget_debug_item,
+                            candidate.label,
+                            candidate.columns,
+                            candidate.rows,
+                        )
+                }
+            }
+
+            val teslaWidgets =
+                appWidgetManager.installedProviders
+                    .filter { it.provider.packageName == "com.teslamotors.tesla" }
+                    .map { info ->
+                        val label = info.loadLabel(packageManager).toString().ifBlank { info.provider.className }
+                        getString(
+                            R.string.settings_widget_debug_raw_item,
+                            label,
+                            info.minWidth,
+                            info.minHeight,
+                            resolveWidgetColumns(info),
+                            resolveWidgetRows(info),
+                        )
+                    }
+
+            lines += ""
+            lines += getString(R.string.settings_widget_debug_tesla)
+            if (teslaWidgets.isEmpty()) {
+                lines += getString(R.string.settings_widget_debug_none)
+            } else {
+                lines += teslaWidgets
+            }
         }
 
         settingsTeslaStatus.text = lines.joinToString(separator = "\n")
         settingsTeslaConfigureButton.text =
-            if (configured) getString(R.string.settings_tesla_configure) else getString(R.string.settings_tesla_configure)
+            if (widgetId != null) getString(R.string.settings_widget_change) else getString(R.string.settings_widget_choose)
     }
 
     private fun renderTeslaHomeStatus() {
-        if (!launcherPreferences.loadTeslaEnabled()) {
+        teslaStatusView.visibility = View.GONE
+    }
+
+    private fun renderTeslaWidgetSlot() {
+        val widgetId = launcherPreferences.loadHomeWidgetId()
+        val shouldShowSlot = launcherPreferences.loadHomeWidgetEnabled()
+
+        updateHomeWidgetSlotSize(widgetId?.let { appWidgetManager.getAppWidgetInfo(it) })
+        teslaWidgetSlot.visibility = if (shouldShowSlot) View.VISIBLE else View.GONE
+        if (!shouldShowSlot) {
+            teslaWidgetContainer.removeAllViews()
+            teslaWidgetPlaceholder.visibility = View.GONE
             teslaStatusView.visibility = View.GONE
             return
         }
 
-        val batteryPercent = launcherPreferences.loadTeslaBatteryPercent()
-        if (batteryPercent == null) {
-            teslaStatusView.visibility = View.GONE
+        if (widgetId == null || widgetId <= 0) {
+            teslaWidgetContainer.removeAllViews()
+            teslaWidgetPlaceholder.visibility = View.VISIBLE
+            renderTeslaHomeStatus()
             return
         }
 
-        teslaStatusView.text = getString(R.string.home_tesla_battery, batteryPercent)
-        teslaStatusView.visibility = View.VISIBLE
+        val info = appWidgetManager.getAppWidgetInfo(widgetId)
+        if (info == null) {
+            clearHomeWidgetBinding(deleteHostId = true)
+            teslaWidgetContainer.removeAllViews()
+            teslaWidgetPlaceholder.visibility = View.VISIBLE
+            renderTeslaHomeStatus()
+            return
+        }
+
+        updateHomeWidgetOptions(widgetId)
+
+        val hostView = appWidgetHost.createView(this, widgetId, info).apply {
+            setAppWidget(widgetId, info)
+            layoutParams =
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                )
+        }
+
+        teslaWidgetContainer.removeAllViews()
+        teslaWidgetContainer.addView(hostView)
+        teslaWidgetPlaceholder.visibility = View.GONE
+        teslaStatusView.visibility = View.GONE
+    }
+
+    private fun showHomeWidgetPickerDialog() {
+        val candidates = loadHomeWidgetCandidates()
+        if (candidates.isEmpty()) {
+            val messageRes =
+                if (appWidgetManager.installedProviders.isEmpty()) {
+                    R.string.settings_widget_missing
+                } else {
+                    R.string.settings_widget_no_matching
+                }
+            Toast.makeText(this, messageRes, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.settings_widget_dialog_title)
+            .setAdapter(HomeWidgetChoiceAdapter(candidates)) { _, which ->
+                bindHomeWidget(candidates[which].info)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun bindHomeWidget(providerInfo: AppWidgetProviderInfo) {
+        clearHomeWidgetBinding(deleteHostId = true)
+        val widgetId = appWidgetHost.allocateAppWidgetId()
+        pendingHomeWidgetId = widgetId
+
+        val wasBound =
+            runCatching {
+                appWidgetManager.bindAppWidgetIdIfAllowed(widgetId, providerInfo.provider)
+            }.getOrDefault(false)
+
+        if (wasBound) {
+            continueHomeWidgetBinding(widgetId, providerInfo)
+            return
+        }
+
+        val bindIntent =
+            Intent(AppWidgetManager.ACTION_APPWIDGET_BIND).apply {
+                putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
+                putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, providerInfo.provider)
+            }
+
+        try {
+            bindHomeWidgetLauncher.launch(bindIntent)
+        } catch (_: ActivityNotFoundException) {
+            appWidgetHost.deleteAppWidgetId(widgetId)
+            pendingHomeWidgetId = null
+            launcherPreferences.saveHomeWidgetEnabled(false)
+            renderSettingsControls()
+            renderTeslaWidgetSlot()
+            Toast.makeText(this, R.string.settings_widget_picker_failed, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun handleHomeWidgetBound(resultCode: Int) {
+        val widgetId = pendingHomeWidgetId ?: return
+        if (resultCode != RESULT_OK) {
+            appWidgetHost.deleteAppWidgetId(widgetId)
+            pendingHomeWidgetId = null
+            renderTeslaWidgetSlot()
+            renderSettingsControls()
+            return
+        }
+
+        val info = appWidgetManager.getAppWidgetInfo(widgetId)
+        if (info == null) {
+            appWidgetHost.deleteAppWidgetId(widgetId)
+            pendingHomeWidgetId = null
+            Toast.makeText(this, R.string.home_widget_bind_failed, Toast.LENGTH_SHORT).show()
+            renderTeslaWidgetSlot()
+            renderSettingsControls()
+            return
+        }
+
+        continueHomeWidgetBinding(widgetId, info)
+    }
+
+    private fun continueHomeWidgetBinding(
+        widgetId: Int,
+        info: AppWidgetProviderInfo,
+    ) {
+        if (info.configure != null) {
+            val configureIntent =
+                Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE).apply {
+                    component = info.configure
+                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
+                }
+            try {
+                configureHomeWidgetLauncher.launch(configureIntent)
+            } catch (_: ActivityNotFoundException) {
+                appWidgetHost.deleteAppWidgetId(widgetId)
+                pendingHomeWidgetId = null
+                Toast.makeText(this, R.string.settings_widget_configure_failed, Toast.LENGTH_SHORT).show()
+                renderTeslaWidgetSlot()
+                renderSettingsControls()
+            }
+            return
+        }
+
+        launcherPreferences.saveHomeWidgetEnabled(true)
+        launcherPreferences.saveHomeWidgetId(widgetId)
+        pendingHomeWidgetId = null
+        updateHomeWidgetOptions(widgetId)
+        renderTeslaWidgetSlot()
+        renderSettingsControls()
+        Toast.makeText(this, R.string.settings_widget_saved, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun handleHomeWidgetConfigured(resultCode: Int) {
+        val widgetId = pendingHomeWidgetId ?: return
+        if (resultCode == RESULT_OK) {
+            launcherPreferences.saveHomeWidgetEnabled(true)
+            launcherPreferences.saveHomeWidgetId(widgetId)
+            updateHomeWidgetOptions(widgetId)
+            Toast.makeText(this, R.string.settings_widget_saved, Toast.LENGTH_SHORT).show()
+        } else {
+            appWidgetHost.deleteAppWidgetId(widgetId)
+        }
+        pendingHomeWidgetId = null
+        renderTeslaWidgetSlot()
+        renderSettingsControls()
+    }
+
+    private fun clearHomeWidgetBinding(deleteHostId: Boolean) {
+        val existingWidgetId = launcherPreferences.loadHomeWidgetId()
+        if (deleteHostId && existingWidgetId != null && existingWidgetId > 0) {
+            runCatching { appWidgetHost.deleteAppWidgetId(existingWidgetId) }
+        }
+        launcherPreferences.saveHomeWidgetId(null)
+    }
+
+    private fun loadHomeWidgetCandidates(): List<HomeWidgetCandidate> =
+        appWidgetManager.installedProviders
+            .mapNotNull { info ->
+                val columns = resolveWidgetColumns(info)
+                val rows = resolveWidgetRows(info)
+                if (rows != 2 || columns !in 2..4) {
+                    return@mapNotNull null
+                }
+
+                HomeWidgetCandidate(
+                    info = info,
+                    columns = columns,
+                    rows = rows,
+                    label = info.loadLabel(packageManager).toString().ifBlank { info.provider.className },
+                    icon = runCatching { packageManager.getApplicationIcon(info.provider.packageName) }.getOrNull(),
+                )
+            }.sortedBy { it.label.lowercase(Locale.getDefault()) }
+
+    private inner class HomeWidgetChoiceAdapter(
+        private val items: List<HomeWidgetCandidate>,
+    ) : BaseAdapter() {
+        private val inflater = LayoutInflater.from(this@MainActivity)
+
+        override fun getCount(): Int = items.size
+
+        override fun getItem(position: Int): HomeWidgetCandidate = items[position]
+
+        override fun getItemId(position: Int): Long = position.toLong()
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val view = convertView ?: inflater.inflate(R.layout.item_widget_choice, parent, false)
+            val item = getItem(position)
+
+            val iconView = view.findViewById<ImageView>(R.id.widgetChoiceIcon)
+            val labelView = view.findViewById<TextView>(R.id.widgetChoiceLabel)
+            val sizeView = view.findViewById<TextView>(R.id.widgetChoiceSize)
+
+            iconView.setImageDrawable(item.icon)
+            labelView.text = item.label
+            sizeView.text = getString(R.string.settings_widget_size_format, item.columns, item.rows)
+
+            return view
+        }
+    }
+
+    private fun resolveWidgetColumns(info: AppWidgetProviderInfo): Int =
+        resolveWidgetColumnsFromDp(
+            targetSpan = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) info.targetCellWidth else 0,
+            widthDp = decodeWidgetDimensionDp(info.minWidth),
+        )
+
+    private fun resolveWidgetRows(info: AppWidgetProviderInfo): Int =
+        resolveWidgetRowsFromDp(
+            targetSpan = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) info.targetCellHeight else 0,
+            heightDp = decodeWidgetDimensionDp(info.minHeight),
+        )
+
+    private fun resolveWidgetColumnsFromDp(targetSpan: Int, widthDp: Int): Int {
+        val inferred =
+            when {
+                widthDp <= 0 -> 1
+                widthDp <= 190 -> 2
+                widthDp <= 300 -> 3
+                else -> 4
+            }
+
+        return when {
+            targetSpan <= 0 -> inferred
+            targetSpan in 2..4 -> maxOf(targetSpan, inferred)
+            else -> inferred
+        }
+    }
+
+    private fun resolveWidgetRowsFromDp(targetSpan: Int, heightDp: Int): Int {
+        val inferred =
+            when {
+                heightDp <= 0 -> 1
+                heightDp <= 190 -> 2
+                heightDp <= 300 -> 3
+                else -> 4
+            }
+
+        return when {
+            targetSpan <= 0 -> inferred
+            targetSpan in 1..4 -> maxOf(targetSpan, inferred)
+            else -> inferred
+        }
+    }
+
+    private fun decodeWidgetDimensionDp(value: Int): Int {
+        if (value <= 0) {
+            return 0
+        }
+
+        // Some providers report plain dp-sized integers here, while others use
+        // Android's complex dimension encoding. Treat normal-looking values as-is.
+        if (value in 1..4096) {
+            return value
+        }
+
+        val decodedPx =
+            runCatching { TypedValue.complexToDimensionPixelSize(value, resources.displayMetrics) }
+                .getOrNull()
+
+        if (decodedPx != null && decodedPx > 0) {
+            return (decodedPx / resources.displayMetrics.density).toInt()
+        }
+
+        return value
+    }
+
+    private fun updateHomeWidgetSlotSize(info: AppWidgetProviderInfo?) {
+        val expanded = launcherPreferences.loadHomeWidgetExpanded() && launcherPreferences.loadHomeWidgetEnabled()
+        val columns = info?.let(::resolveWidgetColumns)?.coerceIn(2, 4) ?: 2
+        val cellSizePx = resources.getDimensionPixelSize(R.dimen.home_widget_cell_size)
+        val heightPx =
+            resources.getDimensionPixelSize(
+                if (expanded) {
+                    R.dimen.home_widget_height_expanded
+                } else {
+                    R.dimen.home_widget_height
+                },
+            )
+        teslaWidgetSlot.layoutParams =
+            (teslaWidgetSlot.layoutParams as LinearLayout.LayoutParams).apply {
+                width = cellSizePx * columns
+                height = heightPx
+            }
+
+        val topPadding =
+            resources.getDimensionPixelSize(
+                if (expanded) {
+                    R.dimen.home_top_padding_expanded_widget
+                } else {
+                    R.dimen.home_top_padding_default
+                },
+            )
+        homeContainer.setPadding(
+            homeContainer.paddingLeft,
+            topPadding,
+            homeContainer.paddingRight,
+            homeContainer.paddingBottom,
+        )
+
+        clockView.layoutParams =
+            (clockView.layoutParams as LinearLayout.LayoutParams).apply {
+                topMargin =
+                    resources.getDimensionPixelSize(
+                        if (expanded) {
+                            R.dimen.home_clock_margin_top_expanded
+                        } else {
+                            R.dimen.home_clock_margin_top_default
+                        },
+                    )
+            }
+
+        homeContentRow.layoutParams =
+            (homeContentRow.layoutParams as LinearLayout.LayoutParams).apply {
+                topMargin =
+                    resources.getDimensionPixelSize(
+                        if (expanded) {
+                            R.dimen.home_content_margin_top_expanded
+                        } else {
+                            R.dimen.home_content_margin_top_default
+                        },
+                    )
+            }
+    }
+
+    private fun updateHomeWidgetOptions(widgetId: Int) {
+        val info = appWidgetManager.getAppWidgetInfo(widgetId)
+        val slotWidthDp =
+            teslaWidgetSlot.layoutParams.width / resources.displayMetrics.density
+        val slotHeightDp =
+            (if (info != null) resources.getDimension(R.dimen.home_widget_height) else resources.getDimension(R.dimen.tesla_widget_size)) /
+                resources.displayMetrics.density
+        val options =
+            Bundle().apply {
+                putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, slotWidthDp.toInt())
+                putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, slotWidthDp.toInt())
+                putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, slotHeightDp.toInt())
+                putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, slotHeightDp.toInt())
+            }
+        runCatching { appWidgetManager.updateAppWidgetOptions(widgetId, options) }
+    }
+
+    private class PlainAppWidgetHost(
+        context: Context,
+        hostId: Int,
+    ) : android.appwidget.AppWidgetHost(context, hostId) {
+        private val hostContext = context.applicationContext
+
+        override fun onCreateView(
+            context: Context,
+            appWidgetId: Int,
+            appWidget: AppWidgetProviderInfo,
+        ): AppWidgetHostView {
+            return AppWidgetHostView(hostContext)
+        }
     }
 
     private fun renderCalendarPanel(state: HomePanelState<HomeCalendarItem>) {
@@ -1098,7 +1592,7 @@ class MainActivity : AppCompatActivity() {
             is LauncherState.Drawer -> {
                 homeContainer.visibility = View.GONE
                 browseContainer.visibility = View.VISIBLE
-                settingsContainer.visibility = View.GONE
+                settingsScrollContainer.visibility = View.GONE
                 appListView.visibility = View.VISIBLE
                 renderQuery(text = getString(R.string.search_hint), isSubtle = true, showSearchIcon = true, showSettings = true)
                 currentBrowseApps = allApps
@@ -1113,7 +1607,7 @@ class MainActivity : AppCompatActivity() {
             is LauncherState.Search -> {
                 homeContainer.visibility = View.GONE
                 browseContainer.visibility = View.VISIBLE
-                settingsContainer.visibility = View.GONE
+                settingsScrollContainer.visibility = View.GONE
                 appListView.visibility = View.VISIBLE
                 renderQuery(text = state.query, isSubtle = false, showSearchIcon = true, showSettings = true)
                 currentBrowseApps = AppSearch.filter(allApps, state.query)
@@ -1129,7 +1623,7 @@ class MainActivity : AppCompatActivity() {
                 homeContainer.visibility = View.GONE
                 browseContainer.visibility = View.VISIBLE
                 currentBrowseApps = emptyList()
-                settingsContainer.visibility = View.VISIBLE
+                settingsScrollContainer.visibility = View.VISIBLE
                 appListView.visibility = View.GONE
                 renderSettingsControls()
                 renderPageIndicators(totalPages = 0, currentPage = 0)
