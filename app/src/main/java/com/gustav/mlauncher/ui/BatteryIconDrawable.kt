@@ -16,30 +16,32 @@ class BatteryIconDrawable(
     context: Context,
     level: Int,
     private val isCharging: Boolean,
+    private val inkColor: Int = Color.BLACK,
+    private val backgroundColor: Int = Color.WHITE,
 ) : Drawable() {
     private val density = context.resources.displayMetrics.density
     private val normalizedLevel = level.coerceIn(0, 100) / 100f
     private val strokeWidth = 1.4f * density
     private val bodyPaint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.BLACK
+            color = inkColor
             style = Paint.Style.STROKE
             this.strokeWidth = this@BatteryIconDrawable.strokeWidth
             strokeJoin = Paint.Join.ROUND
         }
     private val fillPaint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.BLACK
+            color = inkColor
             style = Paint.Style.FILL
         }
     private val boltFillPaint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
+            color = backgroundColor
             style = Paint.Style.FILL
         }
     private val boltStrokePaint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.BLACK
+            color = inkColor
             style = Paint.Style.STROKE
             strokeWidth = 0.85f * density
             strokeJoin = Paint.Join.ROUND

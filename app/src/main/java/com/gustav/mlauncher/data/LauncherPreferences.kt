@@ -2,8 +2,16 @@ package com.gustav.mlauncher.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import org.json.JSONArray
+import org.json.JSONObject
 
 class LauncherPreferences(context: Context) {
+    data class WebShortcut(
+        val id: String,
+        val label: String,
+        val url: String,
+    )
+
     companion object {
         private const val PREFS_NAME = "launcher_prefs"
         private const val SECURE_ALIAS = "mlauncher_secure_prefs_key"
@@ -24,6 +32,9 @@ class LauncherPreferences(context: Context) {
         private const val HOME_WIDGET_DEBUG_KEY = "home_widget_debug"
         private const val HOME_WIDGET_ID_KEY = "home_widget_id"
         private const val TESLA_WIDGET_ID_KEY = "tesla_widget_id"
+        private const val APP_NAME_SIZE_INDEX_KEY = "app_name_size_index"
+        private const val WEB_SHORTCUTS_KEY = "web_shortcuts"
+        private const val DARK_MODE_ENABLED_KEY = "dark_mode_enabled"
     }
 
     private val prefs: SharedPreferences =
@@ -251,6 +262,70 @@ class LauncherPreferences(context: Context) {
                 remove(TESLA_WIDGET_ID_KEY)
             }
         }.apply()
+    }
+
+    fun loadAppNameSizeIndex(): Int = prefs.getInt(APP_NAME_SIZE_INDEX_KEY, 2).coerceIn(0, 3)
+
+    fun saveAppNameSizeIndex(index: Int) {
+        prefs.edit()
+            .putInt(APP_NAME_SIZE_INDEX_KEY, index.coerceIn(0, 3))
+            .apply()
+    }
+
+    fun loadDarkModeEnabled(): Boolean = prefs.getBoolean(DARK_MODE_ENABLED_KEY, false)
+
+    fun saveDarkModeEnabled(enabled: Boolean) {
+        prefs.edit()
+            .putBoolean(DARK_MODE_ENABLED_KEY, enabled)
+            .apply()
+    }
+
+    fun loadWebShortcuts(): List<WebShortcut> {
+        val serialized = prefs.getString(WEB_SHORTCUTS_KEY, "").orEmpty()
+        if (serialized.isBlank()) {
+            return emptyList()
+        }
+
+        return runCatching {
+            val array = JSONArray(serialized)
+            buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val id = item.optString("id").trim()
+                    val label = item.optString("label").trim()
+                    val url = item.optString("url").trim()
+                    if (id.isNotBlank() && label.isNotBlank() && url.isNotBlank()) {
+                        add(WebShortcut(id = id, label = label, url = url))
+                    }
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun saveWebShortcut(shortcut: WebShortcut) {
+        val updated =
+            (loadWebShortcuts().filterNot { it.id == shortcut.id } + shortcut)
+                .filter { it.id.isNotBlank() && it.label.isNotBlank() && it.url.isNotBlank() }
+        saveWebShortcuts(updated)
+    }
+
+    fun removeWebShortcut(shortcutId: String) {
+        saveWebShortcuts(loadWebShortcuts().filterNot { it.id == shortcutId })
+    }
+
+    private fun saveWebShortcuts(shortcuts: List<WebShortcut>) {
+        val array = JSONArray()
+        shortcuts.forEach { shortcut ->
+            array.put(
+                JSONObject()
+                    .put("id", shortcut.id)
+                    .put("label", shortcut.label)
+                    .put("url", shortcut.url),
+            )
+        }
+        prefs.edit()
+            .putString(WEB_SHORTCUTS_KEY, array.toString())
+            .apply()
     }
 
     fun maskedTeslaToken(): String {

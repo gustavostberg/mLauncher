@@ -26,6 +26,7 @@ import android.os.Looper
 import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.provider.Settings
+import android.text.InputType
 import android.text.TextUtils
 import android.util.TypedValue
 import android.util.Log
@@ -73,6 +74,7 @@ import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.Executors
 import kotlin.math.abs
 
@@ -84,6 +86,12 @@ class MainActivity : AppCompatActivity() {
         private const val MAX_HOME_CALENDAR_LINES = 10
         private const val MAX_HOME_GTD_ITEMS = 9
         private const val TESLA_WIDGET_HOST_ID = 1200
+        private val APP_NAME_SIZE_DP = floatArrayOf(20f, 22f, 24f, 26f)
+        private val HOME_FAVORITE_LIMITS = intArrayOf(11, 10, 9, 8)
+        private val HOME_FAVORITE_SPACING_DP = intArrayOf(10, 12, 14, 14)
+        private const val CHROME_PACKAGE = "com.android.chrome"
+        private const val WEB_SHORTCUT_KEY_PREFIX = "web:"
+        private const val WEB_SHORTCUT_COMPONENT_PACKAGE = "com.gustav.mlauncher.web"
         private const val MINI_CALENDAR_PACKAGE = "com.gustav.minicalendar"
         private const val EXTRA_OPEN_FOCUS_DAY = "com.gustav.minicalendar.extra.OPEN_FOCUS_DAY"
         private const val EXTRA_FOCUS_DAY_MILLIS = "com.gustav.minicalendar.extra.FOCUS_DAY_MILLIS"
@@ -144,6 +152,13 @@ class MainActivity : AppCompatActivity() {
         val gtd: HomePanelState<HomeTaskItem> = HomePanelState(),
     )
 
+    private data class LauncherPalette(
+        val background: Int,
+        val ink: Int,
+        val divider: Int,
+        val overlay: Int,
+    )
+
     private val appRepository = AppRepository()
     private lateinit var launcherPreferences: LauncherPreferences
     private val appListAdapter = AppListAdapter(::launchApp, ::showDrawerContextMenu)
@@ -169,6 +184,7 @@ class MainActivity : AppCompatActivity() {
             handleHomeWidgetConfigured(result.resultCode)
         }
 
+    private lateinit var rootView: View
     private lateinit var homeContainer: View
     private lateinit var browseContainer: View
     private lateinit var homeTopRow: LinearLayout
@@ -186,6 +202,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var settingsButton: ImageButton
     private lateinit var settingsScrollContainer: View
     private lateinit var settingsContainer: LinearLayout
+    private lateinit var settingsAppNameSizeValue: TextView
+    private lateinit var settingsDarkModeSwitch: SwitchCompat
+    private lateinit var settingsChromeLinkAddButton: TextView
     private lateinit var settingsIntegrationSwitch: SwitchCompat
     private lateinit var settingsIntegrationHint: TextView
     private lateinit var settingsTeslaSwitch: SwitchCompat
@@ -202,11 +221,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var gtdTitleView: TextView
     private lateinit var gtdAddButton: TextView
     private lateinit var gtdItemsContainer: LinearLayout
+    private lateinit var gtdDivider: View
     private lateinit var appListView: RecyclerView
     private lateinit var pageIndicatorContainer: LinearLayout
+    private lateinit var searchDivider: View
     private lateinit var contextMenuOverlay: FrameLayout
     private lateinit var contextMenuCard: LinearLayout
     private lateinit var contextMenuTitle: TextView
+    private lateinit var contextMenuDivider: View
     private lateinit var contextMenuActionsContainer: LinearLayout
     private lateinit var contextMenuCloseButton: ImageButton
 
@@ -273,15 +295,14 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        launcherPreferences = LauncherPreferences(this)
         WindowCompat.setDecorFitsSystemWindows(window, true)
         setContentView(R.layout.activity_main)
-        window.statusBarColor = ContextCompat.getColor(this, R.color.white)
-        window.navigationBarColor = ContextCompat.getColor(this, R.color.white)
-        WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = true
-        launcherPreferences = LauncherPreferences(this)
 
         bindViews()
+        applyLauncherTheme()
         setupList()
+        applyAppNameTextSize()
         setupHomePanels()
         setupSettingsControls()
         setupContextMenu()
@@ -357,6 +378,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun bindViews() {
+        rootView = findViewById(R.id.rootView)
         homeContainer = findViewById(R.id.homeContainer)
         browseContainer = findViewById(R.id.browseContainer)
         homeTopRow = findViewById(R.id.homeTopRow)
@@ -374,6 +396,9 @@ class MainActivity : AppCompatActivity() {
         settingsButton = findViewById(R.id.settingsButton)
         settingsScrollContainer = findViewById(R.id.settingsScrollContainer)
         settingsContainer = findViewById(R.id.settingsContainer)
+        settingsAppNameSizeValue = findViewById(R.id.settingsAppNameSizeValue)
+        settingsDarkModeSwitch = findViewById(R.id.settingsDarkModeSwitch)
+        settingsChromeLinkAddButton = findViewById(R.id.settingsChromeLinkAddButton)
         settingsIntegrationSwitch = findViewById(R.id.settingsIntegrationSwitch)
         settingsIntegrationHint = findViewById(R.id.settingsIntegrationHint)
         settingsTeslaSwitch = findViewById(R.id.settingsTeslaSwitch)
@@ -390,11 +415,14 @@ class MainActivity : AppCompatActivity() {
         gtdTitleView = findViewById(R.id.gtdTitleView)
         gtdAddButton = findViewById(R.id.gtdAddButton)
         gtdItemsContainer = findViewById(R.id.gtdItemsContainer)
+        gtdDivider = findViewById(R.id.gtdDivider)
         appListView = findViewById(R.id.appListView)
         pageIndicatorContainer = findViewById(R.id.pageIndicatorContainer)
+        searchDivider = findViewById(R.id.searchDivider)
         contextMenuOverlay = findViewById(R.id.contextMenuOverlay)
         contextMenuCard = findViewById(R.id.contextMenuCard)
         contextMenuTitle = findViewById(R.id.contextMenuTitle)
+        contextMenuDivider = findViewById(R.id.contextMenuDivider)
         contextMenuActionsContainer = findViewById(R.id.contextMenuActionsContainer)
         contextMenuCloseButton = findViewById(R.id.contextMenuCloseButton)
     }
@@ -425,6 +453,31 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupSettingsControls() {
+        settingsAppNameSizeValue.setOnClickListener {
+            val nextIndex = (launcherPreferences.loadAppNameSizeIndex() + 1) % APP_NAME_SIZE_DP.size
+            launcherPreferences.saveAppNameSizeIndex(nextIndex)
+            applyAppNameTextSize()
+            favoriteApps = resolveFavoriteApps(allApps)
+            renderFavorites()
+            renderSettingsControls()
+        }
+        settingsChromeLinkAddButton.setOnClickListener {
+            showWebShortcutDialog()
+        }
+
+        settingsDarkModeSwitch.setOnCheckedChangeListener { _, isChecked ->
+            if (suppressIntegrationSwitchCallback) {
+                return@setOnCheckedChangeListener
+            }
+
+            launcherPreferences.saveDarkModeEnabled(isChecked)
+            applyLauncherTheme()
+            renderFavorites()
+            renderHomeIntegrations()
+            renderState(currentState)
+            updateBattery(registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)))
+        }
+
         settingsIntegrationSwitch.setOnCheckedChangeListener { _, isChecked ->
             if (suppressIntegrationSwitchCallback) {
                 return@setOnCheckedChangeListener
@@ -567,12 +620,15 @@ class MainActivity : AppCompatActivity() {
         applyHomeLayoutMode()
         favoritesContainer.removeAllViews()
         val useIntegration = isHomeIntegrationEnabled()
+        val appNameTextSizeDp = currentAppNameTextSizeDp()
+        val appNameSpacingDp = currentHomeFavoriteSpacingDp()
+        val palette = currentPalette()
 
-        favoriteApps.forEach { app ->
+        favoriteApps.take(currentHomeFavoriteLimit()).forEach { app ->
             val labelView = AppCompatTextView(this).apply {
                 text = app.label
-                textSize = 24f
-                setTextColor(ContextCompat.getColor(context, R.color.black))
+                setTextSize(TypedValue.COMPLEX_UNIT_DIP, appNameTextSizeDp)
+                setTextColor(palette.ink)
                 typeface = workSansRegular
                 includeFontPadding = false
                 letterSpacing = 0.025f
@@ -580,7 +636,7 @@ class MainActivity : AppCompatActivity() {
                 gravity = if (useIntegration) Gravity.END else Gravity.CENTER_HORIZONTAL
                 ellipsize = TextUtils.TruncateAt.END
                 maxLines = 1
-                setPadding(0, 0, 4.dp, resources.getDimensionPixelSize(R.dimen.favorite_spacing))
+                setPadding(0, 0, 4.dp, appNameSpacingDp.dp)
                 setOnClickListener { launchApp(app) }
                 setOnLongClickListener {
                     showHomeContextMenu(app)
@@ -643,6 +699,120 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
+    private fun currentAppNameTextSizeDp(): Float {
+        return APP_NAME_SIZE_DP[launcherPreferences.loadAppNameSizeIndex()]
+    }
+
+    private fun currentHomeFavoriteLimit(): Int {
+        return HOME_FAVORITE_LIMITS[launcherPreferences.loadAppNameSizeIndex()]
+    }
+
+    private fun currentHomeFavoriteSpacingDp(): Int {
+        return HOME_FAVORITE_SPACING_DP[launcherPreferences.loadAppNameSizeIndex()]
+    }
+
+    private fun applyAppNameTextSize() {
+        appListAdapter.setLabelTextSizeDp(currentAppNameTextSizeDp())
+    }
+
+    private fun applyLauncherTheme() {
+        val palette = currentPalette()
+        val useDarkMode = launcherPreferences.loadDarkModeEnabled()
+
+        window.statusBarColor = palette.background
+        window.navigationBarColor = palette.background
+        WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = !useDarkMode
+
+        rootView.setBackgroundColor(palette.background)
+        homeContainer.setBackgroundColor(palette.background)
+        browseContainer.setBackgroundColor(palette.background)
+        settingsScrollContainer.setBackgroundColor(palette.background)
+        settingsContainer.setBackgroundColor(palette.background)
+        appListView.setBackgroundColor(palette.background)
+        searchDivider.setBackgroundColor(palette.divider)
+        gtdDivider.setBackgroundColor(palette.divider)
+        contextMenuDivider.setBackgroundColor(palette.ink)
+        contextMenuOverlay.setBackgroundColor(palette.overlay)
+        contextMenuCard.background = contextMenuCardBackground(palette)
+        contextMenuCloseButton.background = contextMenuCloseBackground(palette)
+        contextMenuCloseButton.setColorFilter(palette.ink)
+        settingsButton.setColorFilter(palette.ink)
+        appListAdapter.setLabelTextColor(palette.ink)
+
+        applyLauncherThemeToView(rootView, palette)
+        renderPageIndicators(totalPages = totalPages(currentBrowseApps), currentPage = currentPageIndex())
+    }
+
+    private fun currentPalette(): LauncherPalette {
+        return if (launcherPreferences.loadDarkModeEnabled()) {
+            LauncherPalette(
+                background = ContextCompat.getColor(this, R.color.launcher_dark_background),
+                ink = ContextCompat.getColor(this, R.color.launcher_dark_ink),
+                divider = ContextCompat.getColor(this, R.color.launcher_dark_divider),
+                overlay = ContextCompat.getColor(this, R.color.launcher_dark_overlay),
+            )
+        } else {
+            LauncherPalette(
+                background = ContextCompat.getColor(this, R.color.white),
+                ink = ContextCompat.getColor(this, R.color.black),
+                divider = ContextCompat.getColor(this, R.color.ink_divider),
+                overlay = 0x33FFFFFF,
+            )
+        }
+    }
+
+    private fun applyLauncherThemeToView(view: View, palette: LauncherPalette) {
+        if (view === teslaWidgetContainer || view is AppWidgetHostView) {
+            return
+        }
+
+        if (view is TextView) {
+            view.setTextColor(palette.ink)
+            tintCompoundDrawables(view, palette.ink)
+        }
+
+        if (view is ImageButton) {
+            view.setColorFilter(palette.ink)
+        }
+
+        if (view is ViewGroup) {
+            for (index in 0 until view.childCount) {
+                applyLauncherThemeToView(view.getChildAt(index), palette)
+            }
+        }
+    }
+
+    private fun tintCompoundDrawables(textView: TextView, color: Int) {
+        textView.compoundDrawablesRelative.filterNotNull().forEach { drawable ->
+            drawable.mutate().setTint(color)
+        }
+    }
+
+    private fun contextMenuCardBackground(palette: LauncherPalette): Drawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(palette.background)
+            setStroke(2.dp, palette.ink)
+            cornerRadius = 18.dp.toFloat()
+        }
+
+    private fun contextMenuCloseBackground(palette: LauncherPalette): Drawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(palette.background)
+            setStroke(2.dp, palette.ink)
+        }
+
+    private fun currentPageIndex(): Int {
+        return when (val state = currentState) {
+            is LauncherState.Drawer -> state.page
+            is LauncherState.Search -> state.page
+            LauncherState.Home,
+            LauncherState.Settings,
+            -> 0
+        }
+    }
+
     private fun renderSettingsControls() {
         val available = isHomeIntegrationAvailable()
         val enabled = isHomeIntegrationEnabled()
@@ -651,7 +821,11 @@ class MainActivity : AppCompatActivity() {
         val widgetExpanded = launcherPreferences.loadHomeWidgetExpanded()
         val widgetDebug = launcherPreferences.loadHomeWidgetDebug()
         val hasWidget = launcherPreferences.loadHomeWidgetId() != null
+        val appNameSize = currentAppNameTextSizeDp()
+        val darkModeEnabled = launcherPreferences.loadDarkModeEnabled()
+        settingsAppNameSizeValue.text = getString(R.string.settings_app_name_size_value, appNameSize.toInt())
         suppressIntegrationSwitchCallback = true
+        settingsDarkModeSwitch.isChecked = darkModeEnabled
         settingsIntegrationSwitch.isEnabled = available
         settingsIntegrationSwitch.isChecked = enabled
         settingsTeslaSwitch.isEnabled = widgetsAvailable
@@ -959,7 +1133,9 @@ class MainActivity : AppCompatActivity() {
 
             iconView.setImageDrawable(item.icon)
             labelView.text = item.label
+            labelView.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
             sizeView.text = getString(R.string.settings_widget_size_format, item.columns, item.rows)
+            sizeView.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
 
             return view
         }
@@ -1141,11 +1317,18 @@ class MainActivity : AppCompatActivity() {
                                 item = item,
                             )
                         } else {
+                            val focusDayMillis = item.focusDayMillis
                             addHomePanelLine(
                                 container = calendarItemsContainer,
                                 text = item.line,
                                 isMessage = false,
                                 isHeading = item.isHeading,
+                                onClick =
+                                    if (focusDayMillis != null) {
+                                        { openCalendarDay(focusDayMillis) }
+                                    } else {
+                                        null
+                                    },
                             )
                         }
                     }
@@ -1165,6 +1348,7 @@ class MainActivity : AppCompatActivity() {
         item: HomeCalendarItem,
     ) {
         val focusDayMillis = item.focusDayMillis ?: return
+        val palette = currentPalette()
 
         val row =
             LinearLayout(this).apply {
@@ -1176,7 +1360,7 @@ class MainActivity : AppCompatActivity() {
             AppCompatTextView(this).apply {
                 text = item.line
                 textSize = 12f
-                setTextColor(ContextCompat.getColor(context, R.color.black))
+                setTextColor(palette.ink)
                 typeface = workSansMedium
                 includeFontPadding = false
                 letterSpacing = 0.02f
@@ -1202,7 +1386,7 @@ class MainActivity : AppCompatActivity() {
             AppCompatTextView(this).apply {
                 text = getString(R.string.home_calendar_add)
                 textSize = 18f
-                setTextColor(ContextCompat.getColor(context, R.color.black))
+                setTextColor(palette.ink)
                 typeface = workSansRegular
                 background = ContextCompat.getDrawable(context, android.R.drawable.list_selector_background)
                 includeFontPadding = false
@@ -1272,9 +1456,11 @@ class MainActivity : AppCompatActivity() {
         text: String,
         isMessage: Boolean,
         isHeading: Boolean = false,
+        onClick: (() -> Unit)? = null,
     ) {
         val textView =
             AppCompatTextView(this).apply {
+                val palette = currentPalette()
                 this.text = text
                 textSize =
                     when {
@@ -1282,13 +1468,19 @@ class MainActivity : AppCompatActivity() {
                         isHeading -> 12f
                         else -> 11f
                     }
-                setTextColor(ContextCompat.getColor(context, R.color.black))
+                setTextColor(palette.ink)
                 typeface = if (isHeading) workSansMedium else workSansRegular
                 includeFontPadding = false
                 letterSpacing = 0.02f
                 ellipsize = TextUtils.TruncateAt.END
                 maxLines = 1
                 alpha = if (isMessage) 0.62f else 1f
+                if (onClick != null) {
+                    background = ContextCompat.getDrawable(context, android.R.drawable.list_selector_background)
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener { onClick() }
+                }
             }
 
         container.addView(
@@ -1479,7 +1671,12 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 dayEvents.take(remaining).forEach { event ->
-                    lines += HomeCalendarItem(line = formatCalendarEventLine(event), isHeading = false)
+                    lines +=
+                        HomeCalendarItem(
+                            line = formatCalendarEventLine(event),
+                            isHeading = false,
+                            focusDayMillis = day.atStartOfDay(zoneId).toInstant().toEpochMilli(),
+                        )
                     addedAnyEvent = true
                 }
             }
@@ -1653,6 +1850,7 @@ class MainActivity : AppCompatActivity() {
             0,
             0,
         )
+        tintCompoundDrawables(queryView, currentPalette().ink)
         settingsButton.visibility = if (showSettings) View.VISIBLE else View.GONE
     }
 
@@ -1693,6 +1891,7 @@ class MainActivity : AppCompatActivity() {
         val activeIndicatorHeight = resources.getDimensionPixelSize(R.dimen.page_indicator_active_height)
         val indicatorSpacing = resources.getDimensionPixelSize(R.dimen.page_indicator_spacing)
         val inactiveStrokeWidth = resources.getDimensionPixelSize(R.dimen.page_indicator_stroke)
+        val palette = currentPalette()
 
         repeat(totalPages) { index ->
             val isActive = index == currentPage
@@ -1702,10 +1901,10 @@ class MainActivity : AppCompatActivity() {
                         GradientDrawable().apply {
                             shape = GradientDrawable.OVAL
                             if (isActive) {
-                                setColor(ContextCompat.getColor(context, R.color.black))
+                                setColor(palette.ink)
                             } else {
                                 setColor(ContextCompat.getColor(context, android.R.color.transparent))
-                                setStroke(inactiveStrokeWidth, ContextCompat.getColor(context, R.color.black))
+                                setStroke(inactiveStrokeWidth, palette.ink)
                             }
                         }
                 }
@@ -1749,11 +1948,12 @@ class MainActivity : AppCompatActivity() {
                 status == BatteryManager.BATTERY_STATUS_FULL ||
                 plugged != 0
 
+        val palette = currentPalette()
         batteryView.text = getString(R.string.battery_format, percent)
         batteryView.setCompoundDrawablesRelativeWithIntrinsicBounds(
             null,
             null,
-            BatteryIconDrawable(this, percent, isCharging),
+            BatteryIconDrawable(this, percent, isCharging, palette.ink, palette.background),
             null,
         )
     }
@@ -1889,6 +2089,14 @@ class MainActivity : AppCompatActivity() {
         try {
             startActivity(app.buildLaunchIntent())
         } catch (_: ActivityNotFoundException) {
+            if (app.isWebShortcut && !app.webUrl.isNullOrBlank()) {
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(app.webUrl)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    return
+                } catch (_: ActivityNotFoundException) {
+                    // Fall through to the shared failure toast.
+                }
+            }
             Toast.makeText(this, R.string.launch_failed, Toast.LENGTH_SHORT).show()
         }
     }
@@ -2032,7 +2240,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
         return try {
-            launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
             startActivity(launchIntent)
             true
         } catch (_: ActivityNotFoundException) {
@@ -2117,6 +2325,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showHomeContextMenu(app: LaunchableApp) {
+        if (app.isWebShortcut) {
+            showContextMenu(
+                app = app,
+                actions = listOf(
+                    MenuAction(R.drawable.ic_context_edit, getString(R.string.action_edit)) {
+                        showWebShortcutDialog(app)
+                    },
+                    MenuAction(R.drawable.ic_context_remove, getString(R.string.action_remove)) {
+                        removeFavorite(app)
+                    },
+                ),
+            )
+            return
+        }
+
         showContextMenu(
             app = app,
             actions = listOf(
@@ -2154,7 +2377,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showContextMenu(app: LaunchableApp, actions: List<MenuAction>) {
+        val palette = currentPalette()
         contextMenuTitle.text = app.label
+        contextMenuTitle.setTextColor(palette.ink)
+        contextMenuDivider.setBackgroundColor(palette.ink)
+        contextMenuCard.background = contextMenuCardBackground(palette)
+        contextMenuCloseButton.background = contextMenuCloseBackground(palette)
+        contextMenuCloseButton.setColorFilter(palette.ink)
         contextMenuActionsContainer.removeAllViews()
 
         actions.forEach { menuAction ->
@@ -2164,7 +2393,9 @@ class MainActivity : AppCompatActivity() {
             val labelView = actionView.findViewById<TextView>(R.id.contextActionLabel)
 
             iconView.setImageResource(menuAction.iconRes)
+            iconView.setColorFilter(palette.ink)
             labelView.text = menuAction.label
+            labelView.setTextColor(palette.ink)
             actionView.setOnClickListener {
                 dismissContextMenu()
                 menuAction.action()
@@ -2211,13 +2442,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun addFavorite(app: LaunchableApp) {
-        if (favoriteApps.any { it.componentName == app.componentName }) {
+        if (favoriteApps.any { componentKey(it) == componentKey(app) }) {
             Toast.makeText(this, R.string.favorite_exists, Toast.LENGTH_SHORT).show()
             return
         }
 
-        if (favoriteApps.size >= MAX_HOME_FAVORITES) {
-            Toast.makeText(this, R.string.favorite_limit_reached, Toast.LENGTH_SHORT).show()
+        val favoriteLimit = currentHomeFavoriteLimit()
+        if (favoriteApps.size >= favoriteLimit) {
+            Toast.makeText(this, getString(R.string.favorite_limit_reached, favoriteLimit), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -2226,8 +2458,105 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun removeFavorite(app: LaunchableApp) {
-        saveCustomFavorites(favoriteApps.filterNot { it.componentName == app.componentName })
+        saveCustomFavorites(favoriteApps.filterNot { componentKey(it) == componentKey(app) })
+        app.webShortcutId?.let(launcherPreferences::removeWebShortcut)
         refreshDisplayedApps()
+    }
+
+    private fun showWebShortcutDialog(existingApp: LaunchableApp? = null) {
+        val existingShortcutId = existingApp?.webShortcutId
+        val container =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(20.dp, 12.dp, 20.dp, 0)
+            }
+        val labelInput =
+            EditText(this).apply {
+                hint = getString(R.string.web_shortcut_name_label)
+                setText(existingApp?.label.orEmpty())
+                setSingleLine()
+                typeface = workSansRegular
+                textSize = 18f
+            }
+        val urlInput =
+            EditText(this).apply {
+                hint = getString(R.string.web_shortcut_url_label)
+                setText(existingApp?.webUrl.orEmpty())
+                setSingleLine()
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+                typeface = workSansRegular
+                textSize = 18f
+            }
+        container.addView(labelInput)
+        container.addView(urlInput)
+
+        val dialog =
+            AlertDialog.Builder(this)
+                .setTitle(
+                    getString(
+                        if (existingShortcutId == null) {
+                            R.string.web_shortcut_add_title
+                        } else {
+                            R.string.web_shortcut_edit_title
+                        },
+                    ),
+                )
+                .setView(container)
+                .setPositiveButton(R.string.save, null)
+                .setNegativeButton(R.string.cancel, null)
+                .show()
+
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val label = labelInput.text?.toString()?.trim().orEmpty()
+            val url = normalizeWebShortcutUrl(urlInput.text?.toString().orEmpty())
+            if (label.isBlank() || url == null) {
+                Toast.makeText(this, R.string.web_shortcut_invalid, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            if (existingShortcutId == null && favoriteApps.size >= currentHomeFavoriteLimit()) {
+                Toast.makeText(
+                    this,
+                    getString(R.string.favorite_limit_reached, currentHomeFavoriteLimit()),
+                    Toast.LENGTH_SHORT,
+                ).show()
+                return@setOnClickListener
+            }
+
+            val shortcut =
+                LauncherPreferences.WebShortcut(
+                    id = existingShortcutId ?: UUID.randomUUID().toString(),
+                    label = label,
+                    url = url,
+                )
+            launcherPreferences.saveWebShortcut(shortcut)
+            val shortcutApp = shortcut.toLaunchableApp()
+            if (existingShortcutId == null) {
+                addFavorite(shortcutApp)
+            } else {
+                refreshDisplayedApps()
+            }
+            dialog.dismiss()
+        }
+    }
+
+    private fun normalizeWebShortcutUrl(rawUrl: String): String? {
+        val trimmed = rawUrl.trim()
+        if (trimmed.isBlank()) {
+            return null
+        }
+
+        val withScheme =
+            if (trimmed.contains("://")) {
+                trimmed
+            } else {
+                "https://$trimmed"
+            }
+        val uri = Uri.parse(withScheme)
+        return if ((uri.scheme == "https" || uri.scheme == "http") && !uri.host.isNullOrBlank()) {
+            uri.toString()
+        } else {
+            null
+        }
     }
 
     private fun editAppLabel(app: LaunchableApp) {
@@ -2448,13 +2777,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun resolveFavoriteApps(apps: List<LaunchableApp>): List<LaunchableApp> {
         if (!launcherPreferences.hasCustomFavorites()) {
-            return sortAppsByLabel(appRepository.selectFavorites(apps, MAX_HOME_FAVORITES))
+            return sortAppsByLabel(appRepository.selectFavorites(apps, currentHomeFavoriteLimit()))
         }
 
         val appsByKey = apps.associateBy { componentKey(it) }
+        val shortcutsByKey =
+            launcherPreferences.loadWebShortcuts()
+                .map { shortcut -> webShortcutKey(shortcut.id) to shortcut.toLaunchableApp() }
+                .toMap()
         val savedFavorites =
             launcherPreferences.loadFavoriteComponentKeys().mapNotNull { componentKey ->
-                appsByKey[componentKey]
+                appsByKey[componentKey] ?: shortcutsByKey[componentKey]
             }
         return sortAppsByLabel(savedFavorites)
     }
@@ -2463,7 +2796,20 @@ class MainActivity : AppCompatActivity() {
         launcherPreferences.saveFavoriteComponentKeys(favorites.map(::componentKey))
     }
 
-    private fun componentKey(app: LaunchableApp): String = app.componentName.flattenToString()
+    private fun componentKey(app: LaunchableApp): String =
+        app.webShortcutId?.let(::webShortcutKey) ?: app.componentName.flattenToString()
+
+    private fun webShortcutKey(shortcutId: String): String = "$WEB_SHORTCUT_KEY_PREFIX$shortcutId"
+
+    private fun LauncherPreferences.WebShortcut.toLaunchableApp(): LaunchableApp =
+        LaunchableApp(
+            label = label,
+            packageName = CHROME_PACKAGE,
+            componentName = ComponentName(WEB_SHORTCUT_COMPONENT_PACKAGE, "Shortcut_$id"),
+            defaultLabel = label,
+            webShortcutId = id,
+            webUrl = url,
+        )
 
     private fun isSystemApp(packageName: String): Boolean {
         return try {
