@@ -16,7 +16,7 @@ object TeslaSyncScheduler {
 
     fun syncFromPreferences(context: Context) {
         val preferences = LauncherPreferences(context)
-        if (!preferences.loadTeslaEnabled() || !preferences.isTeslaConfigured()) {
+        if (!TeslaRepository.FLEET_API_ENABLED || !preferences.loadTeslaEnabled() || !preferences.isTeslaConfigured()) {
             WorkManager.getInstance(context).cancelUniqueWork(UNIQUE_WORK_NAME)
             return
         }

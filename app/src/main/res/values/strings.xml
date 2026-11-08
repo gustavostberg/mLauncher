@@ -29,7 +29,7 @@
     <string name="home_gtd_add">+</string>
     <string name="settings_title">settings</string>
     <string name="settings_app_name">mLauncher</string>
-    <string name="settings_revision">revision 1.30</string>
+    <string name="settings_revision">revision %1$s</string>
     <string name="settings_app_name_size_label">App name size</string>
     <string name="settings_app_name_size_value">%1$d</string>
     <string name="settings_app_name_size_hint">Keeps home and app drawer names independent from Android font size.</string>

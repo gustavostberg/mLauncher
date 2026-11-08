@@ -29,6 +29,8 @@ class TeslaRepository(
 ) {
     companion object {
         const val DEFAULT_BASE_URL = "https://fleet-api.prd.eu.vn.cloud.tesla.com"
+        // Fleet API setup is hidden; old credentials must not trigger background requests.
+        const val FLEET_API_ENABLED = false
     }
 
     fun shouldSyncNow(now: ZonedDateTime = ZonedDateTime.now()): Boolean {
@@ -37,6 +39,9 @@ class TeslaRepository(
     }
 
     fun fetchAndCacheBatteryStatus(): TeslaFetchResult {
+        if (!FLEET_API_ENABLED) {
+            return TeslaFetchResult.Failure("Tesla Fleet API integration is paused.")
+        }
         return try {
             if (!preferences.loadTeslaEnabled()) {
                 return TeslaFetchResult.Failure("Tesla integration is disabled.")

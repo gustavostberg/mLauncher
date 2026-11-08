@@ -18,6 +18,8 @@
 local.properties
 .android-user/
 .gradle-user/
+.kotlin/
+/tmp/
 *.apk
 *.aab
 *.ap_

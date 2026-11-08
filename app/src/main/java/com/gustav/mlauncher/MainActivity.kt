@@ -288,6 +288,9 @@ class MainActivity : AppCompatActivity() {
                     velocityX: Float,
                     velocityY: Float,
                 ): Boolean {
+                    if (currentState == LauncherState.Settings || contextMenuOverlay.visibility == View.VISIBLE) {
+                        return false
+                    }
                     val startEvent = e1 ?: return false
                     val distanceY = startEvent.y - e2.y
                     val distanceX = e2.x - startEvent.x
@@ -364,6 +367,7 @@ class MainActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.action == Intent.ACTION_MAIN && intent.hasCategory(Intent.CATEGORY_HOME)) {
+            dismissContextMenu()
             renderState(LauncherState.Home)
         }
     }
@@ -766,7 +770,10 @@ class MainActivity : AppCompatActivity() {
 
         window.statusBarColor = palette.background
         window.navigationBarColor = palette.background
-        WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = !useDarkMode
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            isAppearanceLightStatusBars = !useDarkMode
+            isAppearanceLightNavigationBars = !useDarkMode
+        }
 
         rootView.setBackgroundColor(palette.background)
         homeContainer.setBackgroundColor(palette.background)
@@ -859,6 +866,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderSettingsControls() {
+        findViewById<TextView>(R.id.settingsRevisionView).text = getString(
+            R.string.settings_revision, packageManager.getPackageInfo(packageName, 0).versionName,
+        )
         val available = isHomeIntegrationAvailable()
         val enabled = isHomeIntegrationEnabled()
         val widgetsAvailable = appWidgetManager.installedProviders.isNotEmpty()
@@ -2107,23 +2117,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchApp(app: LaunchableApp) {
-        if (currentState is LauncherState.Search) {
-            currentState = LauncherState.Drawer()
-            currentBrowseApps = allApps
-        }
-
         try {
             startActivity(app.buildLaunchIntent())
+            clearSearchAfterLaunch()
         } catch (_: ActivityNotFoundException) {
             if (app.isWebShortcut && !app.webUrl.isNullOrBlank()) {
                 try {
                     startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(app.webUrl)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    clearSearchAfterLaunch()
                     return
                 } catch (_: ActivityNotFoundException) {
                     // Fall through to the shared failure toast.
                 }
             }
             Toast.makeText(this, R.string.launch_failed, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun clearSearchAfterLaunch() {
+        if (currentState is LauncherState.Search) {
+            renderState(LauncherState.Drawer())
         }
     }
 

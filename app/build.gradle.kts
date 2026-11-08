@@ -10,8 +10,8 @@ android {
         applicationId = "com.gustav.mlauncher"
         minSdk = 28
         targetSdk = 34
-        versionCode = 132
-        versionName = "1.32"
+        versionCode = 133
+        versionName = "1.33"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
