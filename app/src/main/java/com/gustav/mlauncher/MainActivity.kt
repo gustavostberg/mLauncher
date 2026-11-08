@@ -103,6 +103,7 @@ class MainActivity : AppCompatActivity() {
         private const val EXTRA_OPEN_INBOX = "com.gustav.minigtd.extra.OPEN_INBOX"
         private const val EXTRA_OPEN_CAPTURE = "com.gustav.minigtd.extra.OPEN_CAPTURE"
         private val MINI_GTD_URI: Uri = Uri.parse("content://com.gustav.minigtd.launcher/tasks")
+        private val MINI_CALENDAR_URI: Uri = Uri.parse("content://com.gustav.minicalendar.launcher/events")
     }
 
     private data class MenuAction(
@@ -241,6 +242,17 @@ class MainActivity : AppCompatActivity() {
     private var currentBlurTarget: View? = null
     private var suppressIntegrationSwitchCallback = false
     private var pendingHomeWidgetId: Int? = null
+    private var homeStarted = false
+    private var integrationRefreshRunning = false
+    private var integrationRefreshAgain = false
+    private val integrationRefresh = Runnable { refreshHomeIntegrationAsync() }
+    private val integrationObserver = object : android.database.ContentObserver(mainHandler) {
+        override fun onChange(selfChange: Boolean) {
+            if (!homeStarted) return
+            mainHandler.removeCallbacks(integrationRefresh)
+            mainHandler.postDelayed(integrationRefresh, 250L)
+        }
+    }
     @Volatile
     private var appsLoading = false
 
@@ -252,6 +264,7 @@ class MainActivity : AppCompatActivity() {
     private val clockTicker = object : Runnable {
         override fun run() {
             renderClock()
+            refreshHomeIntegrationAsync()
             val delay = 60_000L - (System.currentTimeMillis() % 60_000L) + 25L
             mainHandler.postDelayed(this, delay)
         }
@@ -319,6 +332,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        homeStarted = true
+        listOf(CalendarContract.CONTENT_URI, MINI_CALENDAR_URI, MINI_GTD_URI).forEach { uri ->
+            runCatching { contentResolver.registerContentObserver(uri, true, integrationObserver) }
+                .onFailure { Log.w(TAG, "Could not observe $uri", it) }
+        }
         if (!batteryReceiverRegistered) {
             ContextCompat.registerReceiver(
                 this,
@@ -351,6 +369,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onStop() {
+        homeStarted = false
+        contentResolver.unregisterContentObserver(integrationObserver)
+        mainHandler.removeCallbacks(integrationRefresh)
         if (batteryReceiverRegistered) {
             unregisterReceiver(batteryReceiver)
             batteryReceiverRegistered = false
@@ -612,6 +633,30 @@ class MainActivity : AppCompatActivity() {
                 }
             } catch (_: Exception) {
                 appsLoading = false
+            }
+        }
+    }
+
+    private fun refreshHomeIntegrationAsync() {
+        if (!homeStarted || isDestroyed) return
+        if (integrationRefreshRunning) {
+            integrationRefreshAgain = true
+            return
+        }
+        integrationRefreshRunning = true
+        backgroundExecutor.execute {
+            val snapshot = runCatching { loadHomeIntegrationSnapshot() }.getOrNull()
+            runOnUiThread {
+                integrationRefreshRunning = false
+                if (!homeStarted || isDestroyed) return@runOnUiThread
+                if (snapshot != null && snapshot != homeIntegrationSnapshot) {
+                    homeIntegrationSnapshot = snapshot
+                    renderHomeIntegrations()
+                }
+                if (integrationRefreshAgain) {
+                    integrationRefreshAgain = false
+                    refreshHomeIntegrationAsync()
+                }
             }
         }
     }
@@ -1266,12 +1311,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateHomeWidgetOptions(widgetId: Int) {
-        val info = appWidgetManager.getAppWidgetInfo(widgetId)
         val slotWidthDp =
             teslaWidgetSlot.layoutParams.width / resources.displayMetrics.density
         val slotHeightDp =
-            (if (info != null) resources.getDimension(R.dimen.home_widget_height) else resources.getDimension(R.dimen.tesla_widget_size)) /
-                resources.displayMetrics.density
+            teslaWidgetSlot.layoutParams.height / resources.displayMetrics.density
         val options =
             Bundle().apply {
                 putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, slotWidthDp.toInt())
@@ -1335,11 +1378,10 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            HomePanelAvailability.APP_MISSING,
-            HomePanelAvailability.PROVIDER_UNAVAILABLE,
-            -> {
-                addHomePanelLine(calendarItemsContainer, getString(R.string.home_calendar_empty), isMessage = true)
-            }
+            HomePanelAvailability.APP_MISSING -> addHomePanelLine(
+                calendarItemsContainer, getString(R.string.home_calendar_missing), isMessage = true)
+            HomePanelAvailability.PROVIDER_UNAVAILABLE -> addHomePanelLine(
+                calendarItemsContainer, getString(R.string.home_calendar_update), isMessage = true)
         }
     }
 
@@ -1505,76 +1547,59 @@ class MainActivity : AppCompatActivity() {
         }
 
         return HomeIntegrationSnapshot(
-            calendar = loadSystemCalendarPanelState(),
+            calendar = loadCalendarPanelState(),
             gtd = loadGtdPanelState(),
         )
     }
 
-    private fun loadSystemCalendarPanelState(): HomePanelState<HomeCalendarItem> {
+    private fun loadCalendarPanelState(): HomePanelState<HomeCalendarItem> {
         if (!hasCalendarReadPermission()) {
             return HomePanelState(availability = HomePanelAvailability.PERMISSION_REQUIRED)
         }
-
+        if (!isPackageInstalled(MINI_CALENDAR_PACKAGE)) {
+            return HomePanelState(availability = HomePanelAvailability.APP_MISSING)
+        }
         return try {
-            val zoneId = ZoneId.systemDefault()
-            val today = LocalDate.now(zoneId)
-            val nowMillis = System.currentTimeMillis()
-            val startMillis = today.atStartOfDay(zoneId).toInstant().toEpochMilli()
-            val horizonDays = 14L
-            val endMillis = today.plusDays(horizonDays).plusDays(1).atStartOfDay(zoneId).toInstant().toEpochMilli()
-            val builder = CalendarContract.Instances.CONTENT_URI.buildUpon()
-            ContentUris.appendId(builder, startMillis)
-            ContentUris.appendId(builder, endMillis)
-
-            val cursor =
-                contentResolver.query(
-                    builder.build(),
-                    arrayOf(
-                        CalendarContract.Instances.EVENT_ID,
-                        CalendarContract.Instances.TITLE,
-                        CalendarContract.Instances.BEGIN,
-                        CalendarContract.Instances.END,
-                        CalendarContract.Instances.ALL_DAY,
-                    ),
-                    null,
-                    null,
-                    "${CalendarContract.Instances.BEGIN} ASC",
-                ) ?: return HomePanelState(availability = HomePanelAvailability.READY)
-
+            val zone = ZoneId.systemDefault()
+            val today = LocalDate.now(zone)
+            val uri = MINI_CALENDAR_URI.buildUpon()
+                .appendQueryParameter("startMillis", today.atStartOfDay(zone).toInstant().toEpochMilli().toString())
+                .appendQueryParameter("endMillis", today.plusDays(14).atStartOfDay(zone).toInstant().toEpochMilli().toString())
+                .appendQueryParameter("limit", "512")
+                .build()
+            val cursor = contentResolver.query(uri, null, null, null, null)
+                ?: return HomePanelState(availability = HomePanelAvailability.PROVIDER_UNAVAILABLE)
             cursor.use {
-                val titleIndex = it.getColumnIndexOrThrow(CalendarContract.Instances.TITLE)
-                val startIndex = it.getColumnIndexOrThrow(CalendarContract.Instances.BEGIN)
-                val endIndex = it.getColumnIndexOrThrow(CalendarContract.Instances.END)
-                val allDayIndex = it.getColumnIndexOrThrow(CalendarContract.Instances.ALL_DAY)
-
+                if (it.extras.getInt("integrationVersion", 0) < 2) {
+                    return HomePanelState(availability = HomePanelAvailability.PROVIDER_UNAVAILABLE)
+                }
+                if (!it.extras.getBoolean("calendarAccess", false)) {
+                    return HomePanelState(availability = HomePanelAvailability.PERMISSION_REQUIRED)
+                }
+                val titleIndex = it.getColumnIndexOrThrow("title")
+                val startIndex = it.getColumnIndexOrThrow("startMillis")
+                val endIndex = it.getColumnIndexOrThrow("endMillis")
+                val allDayIndex = it.getColumnIndexOrThrow("isAllDay")
                 val events = mutableListOf<SystemCalendarEvent>()
                 while (it.moveToNext()) {
                     val title = it.getString(titleIndex)?.trim().orEmpty()
-                    if (title.isBlank()) {
-                        continue
-                    }
-                    events +=
-                        SystemCalendarEvent(
-                            title = title,
-                            startMillis = it.getLong(startIndex),
-                            endMillis = it.getLong(endIndex),
-                            isAllDay = it.getInt(allDayIndex) == 1,
+                    if (title.isNotEmpty()) {
+                        events += SystemCalendarEvent(
+                            title, it.getLong(startIndex), it.getLong(endIndex), it.getInt(allDayIndex) == 1
                         )
-                }
-
-                val visibleEvents =
-                    events.filter { event ->
-                        event.isAllDay || event.endMillis >= nowMillis - 60 * 60 * 1000L
                     }
-
+                }
                 HomePanelState(
                     availability = HomePanelAvailability.READY,
-                    items = buildCalendarPanelLines(visibleEvents, today),
+                    items = buildCalendarPanelLines(events, today),
                 )
             }
-        } catch (exception: Exception) {
-            Log.w(TAG, "Failed to load system calendar integration", exception)
+        } catch (exception: SecurityException) {
+            Log.w(TAG, "Calendar permission unavailable", exception)
             HomePanelState(availability = HomePanelAvailability.PERMISSION_REQUIRED)
+        } catch (exception: Exception) {
+            Log.w(TAG, "Failed to load miniCalendar integration", exception)
+            HomePanelState(availability = HomePanelAvailability.PROVIDER_UNAVAILABLE)
         }
     }
 
@@ -1658,6 +1683,7 @@ class MainActivity : AppCompatActivity() {
                     )
 
             if (day == startDay || dayEvents.isNotEmpty()) {
+                if (day != startDay && MAX_HOME_CALENDAR_LINES - lines.size < 2) return lines
                 lines +=
                     HomeCalendarItem(
                         line = formatCalendarHeading(day),
@@ -1694,7 +1720,7 @@ class MainActivity : AppCompatActivity() {
     private fun formatCalendarHeading(day: LocalDate): String {
         val locale = Locale.getDefault()
         return day
-            .format(DateTimeFormatter.ofPattern("EEEE, MMMM d", locale))
+            .format(DateTimeFormatter.ofPattern("EEE d/M", locale))
             .lowercase(locale)
     }
 
