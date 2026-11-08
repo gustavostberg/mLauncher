@@ -2319,10 +2319,7 @@ class MainActivity : AppCompatActivity() {
                     addCategory(Intent.CATEGORY_LAUNCHER)
                 }
 
-        launchIntent.putExtra(EXTRA_OPEN_NEXT, true)
-        if (openCapture) {
-            launchIntent.putExtra(EXTRA_OPEN_CAPTURE, true)
-        }
+        launchIntent.putExtra(if (openCapture) EXTRA_OPEN_CAPTURE else EXTRA_OPEN_NEXT, true)
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
 
         try {
